@@ -2,7 +2,7 @@ streamlit
 openai-whisper
 ffmpeg-python
 numpy
-streamlit-webrtc
+streamlit_webrtc
 av
 sounddevice
 scipy
