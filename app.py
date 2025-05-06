@@ -6,25 +6,27 @@ import av
 import numpy as np
 import wave
 import os
+import uuid
 
-st.title("🎙️ Voice Recorder + Whisper Transcription")
+st.set_page_config(page_title="Whisper Transcriber", page_icon="🎙️")
+st.title("🎙️ Real-Time Voice Recorder + Transcription (Whisper)")
 
-# Whisper model
+# Load Whisper model once
 @st.cache_resource
 def load_model():
-    return whisper.load_model("base")
+    return whisper.load_model("base")  # Use "small", "medium", "large" for higher accuracy
 
 model = load_model()
 
-# Temporary WAV file writer
+# Save WAV from audio buffer
 def save_wav(audio, filename, sample_rate):
     with wave.open(filename, 'wb') as wf:
         wf.setnchannels(1)
-        wf.setsampwidth(2)
+        wf.setsampwidth(2)  # 16-bit audio
         wf.setframerate(sample_rate)
         wf.writeframes(audio)
 
-# Audio processor
+# Audio processor class to collect audio frames
 class AudioProcessor:
     def __init__(self):
         self.frames = []
@@ -34,7 +36,7 @@ class AudioProcessor:
         self.frames.append(audio)
         return frame
 
-st.info("Click below to start recording your voice.")
+st.info("Click 'Start' to begin recording your voice using your browser's microphone.")
 
 ctx = webrtc_streamer(
     key="speech",
@@ -48,25 +50,35 @@ ctx = webrtc_streamer(
     audio_processor_factory=AudioProcessor,
 )
 
+# Process after recording stops
 if ctx.state.playing:
-    st.warning("🔴 Recording... Speak into the mic.")
+    st.warning("🔴 Recording... Speak now.")
 else:
     if ctx.audio_receiver:
-        # Access collected audio
         audio_processor = ctx.audio_processor
         if audio_processor and audio_processor.frames:
-            audio_data = np.concatenate(audio_processor.frames, axis=1).flatten().astype(np.int16).tobytes()
+            try:
+                # Combine frames into audio buffer
+                audio_data = np.concatenate(audio_processor.frames, axis=1).flatten().astype(np.int16).tobytes()
 
-            # Save to WAV file
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                save_wav(audio_data, f.name, sample_rate=ctx.audio_receiver.get_audio_frame_rate())
-                audio_file_path = f.name
+                # Save to WAV
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                    filename = f.name
+                    sample_rate = ctx.audio_receiver.get_audio_frame_rate()
+                    save_wav(audio_data, filename, sample_rate)
 
-            st.success("✅ Audio recorded. Transcribing...")
-            result = model.transcribe(audio_file_path)
-            st.subheader("📝 Transcription:")
-            st.write(result["text"])
-            st.audio(audio_file_path, format="audio/wav")
+                st.success("✅ Audio recorded successfully.")
+                st.audio(filename, format="audio/wav")
 
-            # Clean up
-            os.remove(audio_file_path)
+                # Transcribe
+                st.info("🔍 Transcribing with Whisper...")
+                result = model.transcribe(filename)
+                st.subheader("📝 Transcription:")
+                st.write(result["text"])
+
+                os.remove(filename)
+
+            except Exception as e:
+                st.error(f"⚠️ Error processing audio: {e}")
+        else:
+            st.info("🟡 No audio recorded yet. Try recording again.")
