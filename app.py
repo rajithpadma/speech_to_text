@@ -1,85 +1,51 @@
 import streamlit as st
-import tempfile
 import whisper
-import streamlit_webrtc
-from streamlit_webrtc import webrtc_streamer,WebRtcMode, ClientSettings
-import av
-import numpy as np
-import wave
+import tempfile
 import os
-import uuid
 
+# Set page title and icon
 st.set_page_config(page_title="Whisper Transcriber", page_icon="🎙️")
-st.title("🎙️ Real-Time Voice Recorder + Transcription (Whisper)")
+st.title("🎙️ Whisper Speech-to-Text Transcriber")
 
-# Load Whisper model once
+st.markdown(
+    "Upload a **.wav**, **.mp3**, or **.m4a** audio file. "
+    "This app uses OpenAI's Whisper model to convert speech to text."
+)
+
+# Load the Whisper model once (cached)
 @st.cache_resource
 def load_model():
-    return whisper.load_model("base")  # Use "small", "medium", "large" for higher accuracy
+    return whisper.load_model("base")  # Try "small", "medium", or "large" for better accuracy
 
 model = load_model()
 
-# Save WAV from audio buffer
-def save_wav(audio, filename, sample_rate):
-    with wave.open(filename, 'wb') as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)  # 16-bit audio
-        wf.setframerate(sample_rate)
-        wf.writeframes(audio)
+# File uploader
+uploaded_file = st.file_uploader("📂 Choose an audio file", type=["wav", "mp3", "m4a"])
 
-# Audio processor class to collect audio frames
-class AudioProcessor:
-    def __init__(self):
-        self.frames = []
+if uploaded_file is not None:
+    # Save the uploaded file to a temporary file with correct extension
+    file_ext = os.path.splitext(uploaded_file.name)[1]
+    with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
+        tmp_file.write(uploaded_file.read())
+        tmp_path = tmp_file.name
 
-    def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
-        audio = frame.to_ndarray()
-        self.frames.append(audio)
-        return frame
+    # Play the audio file in the app
+    st.audio(tmp_path, format='audio/wav')
 
-st.info("Click 'Start' to begin recording your voice using your browser's microphone.")
+    st.info("⏳ Transcribing... please wait.")
+    result = model.transcribe(tmp_path)
 
-ctx = webrtc_streamer(
-    key="speech",
-    mode=WebRtcMode.SENDONLY,
-    in_audio=True,
-    client_settings=ClientSettings(
-        media_stream_constraints={"audio": True, "video": False},
-        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-    ),
-    audio_receiver_size=1024,
-    audio_processor_factory=AudioProcessor,
-)
+    # Show the transcription result
+    st.subheader("📝 Transcription:")
+    st.write(result["text"])
 
-# Process after recording stops
-if ctx.state.playing:
-    st.warning("🔴 Recording... Speak now.")
-else:
-    if ctx.audio_receiver:
-        audio_processor = ctx.audio_processor
-        if audio_processor and audio_processor.frames:
-            try:
-                # Combine frames into audio buffer
-                audio_data = np.concatenate(audio_processor.frames, axis=1).flatten().astype(np.int16).tobytes()
+    # Provide a download button for the transcription
+    st.download_button(
+        label="💾 Download Transcription as .txt",
+        data=result["text"],
+        file_name="transcription.txt",
+        mime="text/plain"
+    )
 
-                # Save to WAV
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                    filename = f.name
-                    sample_rate = ctx.audio_receiver.get_audio_frame_rate()
-                    save_wav(audio_data, filename, sample_rate)
-
-                st.success("✅ Audio recorded successfully.")
-                st.audio(filename, format="audio/wav")
-
-                # Transcribe
-                st.info("🔍 Transcribing with Whisper...")
-                result = model.transcribe(filename)
-                st.subheader("📝 Transcription:")
-                st.write(result["text"])
-
-                os.remove(filename)
-
-            except Exception as e:
-                st.error(f"⚠️ Error processing audio: {e}")
-        else:
-            st.info("🟡 No audio recorded yet. Try recording again.")
+    # Clean up the temp file
+    os.remove(tmp_path)
