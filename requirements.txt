@@ -4,3 +4,6 @@ ffmpeg-python
 numpy
 streamlit-webrtc
 av
+sounddevice
+scipy
+
