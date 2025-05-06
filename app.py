@@ -1,5 +1,3 @@
-!pip install streamlit_webrtc
-import streamlit_webrtc
 import streamlit as st
 import whisper
 import tempfile
@@ -83,22 +81,28 @@ elif mode == "🎤 Record Live":
     elif ctx.audio_processor and ctx.audio_processor.frames:
         st.success("✅ Finished recording. Transcribing...")
 
-        audio = np.concatenate(ctx.audio_processor.frames, axis=1).flatten().astype(np.int16).tobytes()
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            import wave
-            with wave.open(f, 'wb') as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(16000)
-                wf.writeframes(audio)
-            temp_path = f.name
-
+        # Concatenate audio frames and save as temporary file
         try:
-            result = model.transcribe(temp_path)
-            st.subheader("📝 Transcription:")
-            st.write(result["text"])
-            st.download_button("💾 Download Transcript", result["text"], "transcription.txt")
+            audio = np.concatenate(ctx.audio_processor.frames, axis=1).flatten().astype(np.int16).tobytes()
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+                import wave
+                with wave.open(f, 'wb') as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(16000)
+                    wf.writeframes(audio)
+                temp_path = f.name
+
+            # Transcribe the audio
+            try:
+                result = model.transcribe(temp_path)
+                st.subheader("📝 Transcription:")
+                st.write(result["text"])
+                st.download_button("💾 Download Transcript", result["text"], "transcription.txt")
+            except Exception as e:
+                st.error(f"❌ Transcription failed: {e}")
+            finally:
+                os.remove(temp_path)
+
         except Exception as e:
-            st.error(f"❌ Transcription failed: {e}")
-        finally:
-            os.remove(temp_path)
+            st.error(f"❌ Error processing the audio: {e}")
