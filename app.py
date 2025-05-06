@@ -1,3 +1,4 @@
+!pip install streamlit_webrtc
 import streamlit_webrtc
 import streamlit as st
 import whisper
