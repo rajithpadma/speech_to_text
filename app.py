@@ -3,8 +3,11 @@ import whisper
 import tempfile
 import os
 import numpy as np
+import base64
+import io
+from io import BytesIO
 import wave
-import sounddevice as sd
+from streamlit.components.v1 import html
 
 # Set page config
 st.set_page_config(page_title="Whisper Speech-to-Text", page_icon="🎙️")
@@ -19,73 +22,83 @@ def load_model():
 
 model = load_model()
 
-# Function to record audio
-def record_audio(duration, fs=16000):
-    st.info(f"⏳ Recording for {duration} seconds...")
-    audio_data = sd.rec(int(duration * fs), samplerate=fs, channels=1, dtype='int16')
-    sd.wait()  # Wait until recording is finished
-    st.success("✅ Recording finished!")
-    return audio_data.flatten()
-
-# Function to save audio to wav
-def save_audio_to_wav(audio_data, filename, fs=16000):
+# Function to convert audio to wav
+def save_audio_to_wav(audio_data, filename):
     with wave.open(filename, 'wb') as wf:
         wf.setnchannels(1)  # Mono channel
         wf.setsampwidth(2)  # 2 bytes per sample
-        wf.setframerate(fs)  # Sample rate (16000 Hz)
+        wf.setframerate(16000)  # Sample rate (16000 Hz)
         wf.writeframes(audio_data)
     st.audio(filename)  # Display audio player
 
-# Select Mode
-mode = st.radio("Select Mode:", ["📁 Upload Audio File", "🎤 Record Live"])
+# Function to handle base64 audio input from the browser
+def handle_audio_upload(audio_base64):
+    audio_data = base64.b64decode(audio_base64.split(",")[1])  # Decode the base64 audio
+    audio_filename = "temp_audio.wav"
+    
+    # Save the audio to a .wav file
+    with open(audio_filename, "wb") as f:
+        f.write(audio_data)
 
-# Mode 1: Upload
-if mode == "📁 Upload Audio File":
-    uploaded_file = st.file_uploader("Upload a .wav, .mp3, or .m4a file", type=["wav", "mp3", "m4a"])
+    st.audio(audio_filename)  # Display the audio player for the uploaded file
+    
+    # Transcribe the audio with Whisper
+    try:
+        result = model.transcribe(audio_filename)
+        st.subheader("📝 Transcription:")
+        st.write(result["text"])
+        
+        # Provide the download button for the transcription
+        st.download_button("💾 Download Transcript", result["text"], "transcription.txt")
+    except Exception as e:
+        st.error(f"❌ Transcription failed: {e}")
+    finally:
+        os.remove(audio_filename)  # Clean up the temp file
 
-    if uploaded_file:
-        file_ext = os.path.splitext(uploaded_file.name)[1]
-        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
-            tmp.write(uploaded_file.read())
-            tmp_path = tmp.name
+# Custom HTML to record audio in the browser using JavaScript
+html_code = """
+    <script>
+        var audioRecorder;
+        var audioChunks = [];
 
-        st.audio(tmp_path)
-        st.info("⏳ Transcribing...")
+        // Setup the audio recorder
+        async function startRecording() {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const recorder = new MediaRecorder(stream);
+            recorder.ondataavailable = event => audioChunks.push(event.data);
+            recorder.onstop = () => {
+                const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                const audioUrl = URL.createObjectURL(audioBlob);
+                const reader = new FileReader();
+                reader.onloadend = function() {
+                    var base64Audio = reader.result;
+                    const downloadLink = document.createElement('a');
+                    downloadLink.href = audioUrl;
+                    downloadLink.download = "recorded_audio.wav";
+                    downloadLink.click();
 
-        try:
-            result = model.transcribe(tmp_path)
-            st.subheader("📝 Transcription:")
-            st.write(result["text"])
-            st.download_button("💾 Download Transcript", result["text"], "transcription.txt")
-        except Exception as e:
-            st.error(f"❌ Transcription failed: {e}")
-        finally:
-            os.remove(tmp_path)
+                    // Pass the audio as base64 to the Streamlit backend
+                    const message = base64Audio;
+                    window.parent.postMessage(message, "*");
+                };
+                reader.readAsDataURL(audioBlob);
+            };
 
-# Mode 2: Record with Mic
-elif mode == "🎤 Record Live":
-    st.info("🎙️ Press the button below to start recording.")
+            recorder.start();
+            window.setTimeout(() => recorder.stop(), 5000);  // Stop recording after 5 seconds
+        }
 
-    duration = st.slider("Set the recording duration (seconds)", 1, 60, 5)
+        // Start recording when button is clicked
+        startRecording();
+    </script>
+"""
 
-    if st.button("Start Recording"):
-        audio_data = record_audio(duration)
+# Display HTML content to record audio
+html(html_code)
 
-        # Save the recorded audio as a .wav file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
-            audio_filename = f.name
-        save_audio_to_wav(audio_data, audio_filename)
+# Receiving audio from the browser
+audio_base64 = st.text_input("Base64 Audio", "")
 
-        st.info("⏳ Transcribing...")
-
-        try:
-            result = model.transcribe(audio_filename)
-            st.subheader("📝 Transcription:")
-            st.write(result["text"])
-
-            # Provide download link for the transcription
-            st.download_button("💾 Download Transcript", result["text"], "transcription.txt")
-        except Exception as e:
-            st.error(f"❌ Transcription failed: {e}")
-        finally:
-            os.remove(audio_filename)
+# If audio is available, process it
+if audio_base64:
+    handle_audio_upload(audio_base64)
