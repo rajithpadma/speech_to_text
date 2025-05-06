@@ -5,114 +5,98 @@ import os
 import numpy as np
 import av
 
-# Safe import for streamlit_webrtc
 try:
-    import streamlit_webrtc as webrtc
-    WebRtcMode = webrtc.WebRtcMode
-    ClientSettings = webrtc.ClientSettings
-    webrtc_streamer = webrtc.webrtc_streamer
-except ImportError:
-    webrtc_streamer = None
-    WebRtcMode = None
-    ClientSettings = None
+    from streamlit_webrtc import (
+        webrtc_streamer,
+        WebRtcMode,
+        ClientSettings
+    )
+except ImportError as e:
+    st.error("❌ Missing required package: `streamlit-webrtc`. Install it with `pip install streamlit-webrtc`.")
+    raise e
 
-# Set page title
+# Set page config
 st.set_page_config(page_title="Whisper Speech-to-Text", page_icon="🎙️")
 st.title("🎙️ Whisper Speech-to-Text App")
-st.markdown("Choose a mode below to transcribe speech using OpenAI's Whisper model.")
 
-# Load model
+st.markdown("Choose a mode to transcribe speech using OpenAI's Whisper model.")
+
+# Load Whisper model once
 @st.cache_resource
 def load_model():
-    return whisper.load_model("base")  # You can change to "small", "medium", "large"
+    return whisper.load_model("base")  # Use "small", "medium", "large" for more accuracy
 
 model = load_model()
 
-# Mode selection
-mode = st.radio("Select Mode:", ["📁 Upload Audio File", "🎤 Live Recording (Mic)"])
+# Select Mode
+mode = st.radio("Select Mode:", ["📁 Upload Audio File", "🎤 Record Live"])
 
-# --- Upload Mode ---
+# Mode 1: Upload
 if mode == "📁 Upload Audio File":
     uploaded_file = st.file_uploader("Upload a .wav, .mp3, or .m4a file", type=["wav", "mp3", "m4a"])
-    
-    if uploaded_file is not None:
-        file_ext = os.path.splitext(uploaded_file.name)[1]
-        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp_file:
-            tmp_file.write(uploaded_file.read())
-            tmp_path = tmp_file.name
 
-        st.audio(tmp_path, format='audio/wav')
+    if uploaded_file:
+        file_ext = os.path.splitext(uploaded_file.name)[1]
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_ext) as tmp:
+            tmp.write(uploaded_file.read())
+            tmp_path = tmp.name
+
+        st.audio(tmp_path)
         st.info("⏳ Transcribing...")
 
         try:
             result = model.transcribe(tmp_path)
             st.subheader("📝 Transcription:")
             st.write(result["text"])
-
-            st.download_button(
-                label="💾 Download Transcription",
-                data=result["text"],
-                file_name="transcription.txt",
-                mime="text/plain"
-            )
+            st.download_button("💾 Download Transcript", result["text"], "transcription.txt")
         except Exception as e:
             st.error(f"❌ Transcription failed: {e}")
         finally:
             os.remove(tmp_path)
 
-# --- Live Recording Mode ---
-elif mode == "🎤 Live Recording (Mic)":
-    if webrtc_streamer is None:
-        st.error("❌ `streamlit-webrtc` is not installed or couldn't be imported. Install it to enable live mic recording.")
-    else:
-        class AudioProcessor:
-            def __init__(self):
-                self.frames = []
+# Mode 2: Record with Mic
+elif mode == "🎤 Record Live":
+    class AudioProcessor:
+        def __init__(self):
+            self.frames = []
 
-            def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
-                audio = frame.to_ndarray()
-                self.frames.append(audio)
-                return frame
+        def recv(self, frame: av.AudioFrame) -> av.AudioFrame:
+            self.frames.append(frame.to_ndarray())
+            return frame
 
-        ctx = webrtc_streamer(
-            key="speech-to-text",
-            mode=WebRtcMode.SENDONLY,
-            in_audio=True,
-            client_settings=ClientSettings(
-                media_stream_constraints={"audio": True, "video": False},
-                rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}),
-            audio_processor_factory=AudioProcessor,
-            async_processing=True
-        )
+    ctx = webrtc_streamer(
+        key="speech",
+        mode=WebRtcMode.SENDONLY,
+        in_audio=True,
+        client_settings=ClientSettings(
+            media_stream_constraints={"audio": True, "video": False},
+            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+        ),
+        audio_processor_factory=AudioProcessor,
+        async_processing=True,
+    )
 
-        if ctx.state.playing:
-            st.warning("🔴 Recording... Speak into your microphone.")
-        elif ctx.audio_processor:
-            if ctx.audio_processor.frames:
-                st.success("✅ Recording finished. Transcribing...")
+    if ctx.state.playing:
+        st.warning("🎙️ Recording... Speak now.")
+    elif ctx.audio_processor and ctx.audio_processor.frames:
+        st.success("✅ Finished recording. Transcribing...")
 
-                audio_data = np.concatenate(ctx.audio_processor.frames, axis=1).flatten().astype(np.int16).tobytes()
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-                    import wave
-                    with wave.open(f, 'wb') as wf:
-                        wf.setnchannels(1)
-                        wf.setsampwidth(2)
-                        wf.setframerate(16000)
-                        wf.writeframes(audio_data)
-                    audio_path = f.name
+        audio = np.concatenate(ctx.audio_processor.frames, axis=1).flatten().astype(np.int16).tobytes()
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            import wave
+            with wave.open(f, 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(16000)
+                wf.writeframes(audio)
+            temp_path = f.name
 
-                try:
-                    result = model.transcribe(audio_path)
-                    st.subheader("📝 Transcription:")
-                    st.write(result["text"])
-
-                    st.download_button(
-                        label="💾 Download Transcription",
-                        data=result["text"],
-                        file_name="transcription.txt",
-                        mime="text/plain"
-                    )
-                except Exception as e:
-                    st.error(f"❌ Transcription failed: {e}")
-                finally:
-                    os.remove(audio_path)
+        try:
+            result = model.transcribe(temp_path)
+            st.subheader("📝 Transcription:")
+            st.write(result["text"])
+            st.download_button("💾 Download Transcript", result["text"], "transcription.txt")
+        except Exception as e:
+            st.error(f"❌ Transcription failed: {e}")
+        finally:
+            os.remove(temp_path)
