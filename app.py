@@ -2,9 +2,9 @@ import streamlit as st
 import tempfile
 import whisper
 import streamlit_webrtc
-from streamlit_webrtc import Webrtc_streamer
-from streamlit_webrtc import WebRtcMode
-from streamlit_webrtc import ClientSettings
+import webrtc_streamer
+import WebRtcMode
+import ClientSettings
 import av
 import numpy as np
 import wave
