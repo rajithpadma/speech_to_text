@@ -1,91 +1,87 @@
 import streamlit as st
-from streamlit_webrtc import webrtc_streamer, AudioProcessorBase, WebRtcMode
-import whisper
+import sounddevice as sd
+import soundfile as sf
 import numpy as np
-import tempfile
+import tensorflow as tf
+import speech_recognition as sr
 import os
-import wave
 
-# Set page config
-st.set_page_config(page_title="Whisper Speech-to-Text", page_icon="🎙️")
-st.title("🎙️ Whisper Speech-to-Text App")
-st.markdown("This app records or uploads audio and transcribes it using OpenAI's Whisper model.")
-
-# Load Whisper model once
+# Load the pre-trained model
 @st.cache_resource
-def load_model():
-    return whisper.load_model("base")  # Adjust size as needed ("small", "medium", "large")
+def load_model(model_path):
+    return tf.keras.models.load_model(model_path)
 
-model = load_model()
+# Function to record audio
+def record_audio(samplerate=16000, duration=10):
+    st.info("Recording... Speak now!")
+    audio_data = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype='int16')
+    sd.wait()
+    return audio_data
 
-# Custom audio processor for recording audio
-class AudioProcessor(AudioProcessorBase):
-    def __init__(self):
-        self.frames = []
+# Function to save audio to a .wav file
+def save_audio(audio_data, filename, samplerate=16000):
+    sf.write(filename, audio_data, samplerate, subtype='PCM_16')
+    st.success(f"Audio saved to {filename}")
 
-    def recv(self, frame):
-        audio_data = frame.to_ndarray(copy=True)
-        self.frames.append(audio_data)
-        return frame
+# Function to transcribe audio using Google Speech Recognition
+def transcribe_audio(filename):
+    recognizer = sr.Recognizer()
+    try:
+        with sr.AudioFile(filename) as source:
+            audio = recognizer.record(source)
+        text = recognizer.recognize_google(audio)
+        return text
+    except sr.UnknownValueError:
+        st.error("Speech Recognition could not understand the audio.")
+        return None
+    except sr.RequestError as e:
+        st.error(f"Could not request results from Google Speech Recognition service: {e}")
+        return None
 
-# Sidebar for user options
-st.sidebar.title("Options")
-method = st.sidebar.radio("Select an option:", ["Record Audio", "Upload Audio File"])
+# Streamlit app
+st.title("Speech-to-Text and Classification App")
+st.markdown("Upload an audio file or record your voice to transcribe text and process it using a pre-trained model.")
 
-if method == "Record Audio":
-    st.subheader("🎤 Record Audio")
-    ctx = webrtc_streamer(
-        key="speech-to-text",
-        mode=WebRtcMode.SENDRECV,
-        audio_processor_factory=AudioProcessor,
-        media_stream_constraints={"audio": True, "video": False},
-    )
-    if ctx.audio_processor and st.button("🎙️ Save and Transcribe"):
-        audio_frames = ctx.audio_processor.frames
-        if len(audio_frames) == 0:
-            st.warning("No audio recorded. Please record your voice and try again.")
-        else:
-            # Save audio frames to a temporary .wav file
-            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-                tmp_path = tmp_file.name
+# Load the model
+model_path = "speech_model.h5"
+model = load_model(model_path)
 
-            audio_data = np.concatenate(audio_frames, axis=0).astype(np.int16)
-            with wave.open(tmp_path, "wb") as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(16000)
-                wf.writeframes(audio_data.tobytes())
+# Tabs for audio input
+tab1, tab2 = st.tabs(["Upload Audio", "Record Audio"])
 
-            st.audio(tmp_path, format="audio/wav")
-            
-            # Transcribe and display the result
-            try:
-                result = model.transcribe(tmp_path)
-                st.subheader("📝 Transcription:")
-                st.write(result["text"])
-                st.download_button("💾 Download Transcript", result["text"], "transcription.txt")
-            except Exception as e:
-                st.error(f"❌ Transcription failed: {e}")
-            finally:
-                os.remove(tmp_path)  # Clean up temporary file
+with tab1:
+    uploaded_file = st.file_uploader("Upload an audio file (wav, mp3)", type=["wav", "mp3"])
+    if uploaded_file is not None:
+        file_path = os.path.join("temp_audio.wav")
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        st.success("Audio file uploaded successfully.")
 
-elif method == "Upload Audio File":
-    st.subheader("📤 Upload Audio File")
-    uploaded_file = st.file_uploader("Upload an audio file (wav/m4a/mp4):", type=["wav", "m4a", "mp4"])
-    if uploaded_file:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_file:
-            tmp_path = tmp_file.name
-            tmp_file.write(uploaded_file.read())
-        
-        st.audio(tmp_path, format=f"audio/{uploaded_file.type.split('/')[-1]}")
-        
-        # Transcribe and display the result
-        try:
-            result = model.transcribe(tmp_path)
-            st.subheader("📝 Transcription:")
-            st.write(result["text"])
-            st.download_button("💾 Download Transcript", result["text"], "transcription.txt")
-        except Exception as e:
-            st.error(f"❌ Transcription failed: {e}")
-        finally:
-            os.remove(tmp_path)  # Clean up temporary file
+        if st.button("Transcribe Uploaded Audio"):
+            transcription = transcribe_audio(file_path)
+            if transcription:
+                st.text_area("Transcription", transcription, height=100)
+
+with tab2:
+    if st.button("Start Recording"):
+        duration = st.slider("Select recording duration (seconds)", 5, 60, 10)
+        audio_data = record_audio(duration=duration)
+        file_path = "recorded_audio.wav"
+        save_audio(audio_data, file_path)
+
+        if st.button("Transcribe Recorded Audio"):
+            transcription = transcribe_audio(file_path)
+            if transcription:
+                st.text_area("Transcription", transcription, height=100)
+
+# Placeholder for model processing
+st.markdown("---")
+st.header("Model Processing")
+if st.button("Run Model on Transcription"):
+    if transcription:
+        # Example processing: Create dummy input for model
+        dummy_input = np.random.rand(1, 10)
+        prediction = model.predict(dummy_input)
+        st.write(f"Model Output: {prediction}")
+    else:
+        st.error("No transcription available to process.")
