@@ -1,9 +1,7 @@
 streamlit
-openai-whisper
-ffmpeg-python
-numpy
-streamlit_webrtc
-av
 sounddevice
-scipy
-
+soundfile
+numpy
+tensorflow
+pickle
+SpeechRecognition
