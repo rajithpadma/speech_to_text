@@ -1,5 +1,4 @@
 import streamlit as st
-import sounddevice as sd
 import soundfile as sf
 import numpy as np
 import tensorflow as tf
@@ -57,70 +56,43 @@ def save_model(model, filename):
     else:
         st.error("Unsupported file format. Use .h5 or .pkl.")
 
+
+
 # --- Streamlit App ---
 def main():
-    st.title("Audio Recorder and Transcriber")
+    st.title("Audio Transcriber")
 
-    # --- Record/Upload Selection ---
-    record_or_upload = st.radio("Record or Upload Audio", ("Record", "Upload"))
+    # --- Upload Only ---
+    st.write("Upload an audio file (WAV) for transcription.")
+    uploaded_file = st.file_uploader("Upload Audio", type=["wav"])
+    audio_filename = None
 
-    audio_data = None
-    audio_filename = None  # Keep track of the audio file
-
-    if record_or_upload == "Record":
-        st.write("Click the button below to start recording. Recording will stop after 5 seconds.")
-        if st.button("Start Recording"):
-            # Use a temporary file to store the recording
+    if uploaded_file is not None:
+        try:
+            # Save uploaded file to a temporary file
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as temp_audio_file:
-                try:
-                    # Recording logic
-                    samplerate = 16000
-                    duration = 5  # Record for 5 seconds
-                    st.write(f"Recording for {duration} seconds...")
-                    recording = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype='int16')
-                    sd.wait()  # Wait until recording is finished
-                    audio_data = recording
-                    audio_filename = temp_audio_file.name #get the name of the temp file.
-                    sf.write(audio_filename, audio_data, samplerate) #save the recorded data
+                temp_audio_file.write(uploaded_file.read())
+                audio_filename = temp_audio_file.name
+                st.success("File uploaded successfully!")
 
-                    st.success("Recording complete!")
+                # --- Model and Transcription (Conditional) ---
+                if audio_filename:
+                    # Example: Using a simple pre-trained model (for demonstration purposes)
+                    model = tf.keras.Sequential([
+                        tf.keras.layers.Dense(10, activation='relu', input_shape=(10,)),
+                        tf.keras.layers.Dense(1, activation='sigmoid')
+                    ])
+                    #transcribe
+                    transcription = transcribe_audio(audio_filename)
 
-                except Exception as e:
-                    st.error(f"Error during recording: {e}")
-                    audio_data = None
-                    audio_filename = None
+                    # Save model
+                    model_filename = "speech_model.h5"
+                    save_model(model, model_filename)
+                    st.write(f"Model saved to {model_filename}")
 
-    elif record_or_upload == "Upload":
-        uploaded_file = st.file_uploader("Upload an audio file (WAV)", type=["wav"])
-        if uploaded_file is not None:
-            try:
-                # Save the uploaded file to a temporary file
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as temp_audio_file:
-                    temp_audio_file.write(uploaded_file.read())
-                    audio_filename = temp_audio_file.name  # Get the name of the temp file
-                    audio_data, samplerate = sf.read(audio_filename) #read and process
-            except Exception as e:
-                st.error(f"Error uploading/processing file: {e}")
-                audio_data = None
-                audio_filename = None
+                    # Optionally, display the audio
+                    st.audio(audio_filename, format="audio/wav")
 
-    # --- Model and Transcription (Conditional) ---
-    if audio_data is not None and audio_filename is not None: #check if we have audio data.
-        # Example: Using a simple pre-trained model (for demonstration purposes)
-        model = tf.keras.Sequential([
-            tf.keras.layers.Dense(10, activation='relu', input_shape=(10,)),
-            tf.keras.layers.Dense(1, activation='sigmoid')
-        ])
-        #transcribe
-        transcription = transcribe_audio(audio_filename)
-
-        # Save model
-        model_filename = "speech_model.h5"
-        save_model(model, model_filename)
-        st.write(f"Model saved to {model_filename}")
-
-        # Optionally, display the audio
-        st.audio(audio_filename, format="audio/wav")
-
-if __name__ == "__main__":
-    main()
+        except Exception as e:
+            st.error(f"Error processing file: {e}")
+            audio_filename = None
