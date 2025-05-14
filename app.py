@@ -3,85 +3,124 @@ import sounddevice as sd
 import soundfile as sf
 import numpy as np
 import tensorflow as tf
+import pickle
 import speech_recognition as sr
 import os
+import tempfile
+import time  # Import the time module
 
-# Load the pre-trained model
-@st.cache_resource
-def load_model(model_path):
-    return tf.keras.models.load_model(model_path)
-
-# Function to record audio
-def record_audio(samplerate=16000, duration=10):
-    st.info("Recording... Speak now!")
-    audio_data = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype='int16')
-    sd.wait()
-    return audio_data
-
-# Function to save audio to a .wav file
+# --- Helper Functions (Modified for Streamlit) ---
 def save_audio(audio_data, filename, samplerate=16000):
-    sf.write(filename, audio_data, samplerate, subtype='PCM_16')
-    st.success(f"Audio saved to {filename}")
+    """Saves audio data to a .wav file."""
+    if audio_data is not None and audio_data.size > 0:
+        sf.write(filename, audio_data, samplerate, subtype='PCM_16')
+        st.success(f"Audio saved to {filename}")
+        return filename  # Return the filename for further processing
+    else:
+        st.error("No audio data to save.")
+        return None
 
-# Function to transcribe audio using Google Speech Recognition
 def transcribe_audio(filename):
+    """Transcribes audio from a .wav file using SpeechRecognition."""
+    if not os.path.exists(filename):
+        st.error(f"Error: File not found at {filename}")
+        return None
+
     recognizer = sr.Recognizer()
     try:
         with sr.AudioFile(filename) as source:
             audio = recognizer.record(source)
-        text = recognizer.recognize_google(audio)
-        return text
-    except sr.UnknownValueError:
-        st.error("Speech Recognition could not understand the audio.")
+        try:
+            text = recognizer.recognize_google(audio)
+            st.subheader("Transcription:")
+            st.write(text)
+            return text
+        except sr.UnknownValueError:
+            st.error("Speech Recognition could not understand the audio.")
+            return None
+        except sr.RequestError as e:
+            st.error(f"Could not request results from Google Speech Recognition service; {e}")
+            return None
+    except Exception as e:
+        st.error(f"Error processing audio file: {e}")
         return None
-    except sr.RequestError as e:
-        st.error(f"Could not request results from Google Speech Recognition service: {e}")
-        return None
 
-# Streamlit app
-st.title("Speech-to-Text and Classification App")
-st.markdown("Upload an audio file or record your voice to transcribe text and process it using a pre-trained model.")
-
-# Load the model
-model_path = "speech_model.h5"
-model = load_model(model_path)
-
-# Tabs for audio input
-tab1, tab2 = st.tabs(["Upload Audio", "Record Audio"])
-
-with tab1:
-    uploaded_file = st.file_uploader("Upload an audio file (wav, mp3)", type=["wav", "mp3"])
-    if uploaded_file is not None:
-        file_path = os.path.join("temp_audio.wav")
-        with open(file_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        st.success("Audio file uploaded successfully.")
-
-        if st.button("Transcribe Uploaded Audio"):
-            transcription = transcribe_audio(file_path)
-            if transcription:
-                st.text_area("Transcription", transcription, height=100)
-
-with tab2:
-    if st.button("Start Recording"):
-        duration = st.slider("Select recording duration (seconds)", 5, 60, 10)
-        audio_data = record_audio(duration=duration)
-        file_path = "recorded_audio.wav"
-        save_audio(audio_data, file_path)
-
-        if st.button("Transcribe Recorded Audio"):
-            transcription = transcribe_audio(file_path)
-            if transcription:
-                st.text_area("Transcription", transcription, height=100)
-
-# Placeholder for model processing
-st.markdown("---")
-st.header("Model Processing")
-if st.button("Run Model on Transcription"):
-    if transcription:
-        # Example processing: Create dummy input for model
-        dummy_input = np.random.rand(1, 10)
-        prediction = model.predict(dummy_input)
-        st.write(f"Model Output: {prediction}")
+def save_model(model, filename):
+    """Saves a TensorFlow or pickle model."""
+    if filename.endswith('.h5'):
+        model.save(filename)
+        st.success(f"Model saved to {filename}")
+    elif filename.endswith('.pkl'):
+        with open(filename, 'wb') as file:
+            pickle.dump(model, file)
+        st.success(f"Model saved to {filename}")
     else:
-        st.error("No transcription available to process.")
+        st.error("Unsupported file format. Use .h5 or .pkl.")
+
+# --- Streamlit App ---
+def main():
+    st.title("Audio Recorder and Transcriber")
+
+    # --- Record/Upload Selection ---
+    record_or_upload = st.radio("Record or Upload Audio", ("Record", "Upload"))
+
+    audio_data = None
+    audio_filename = None  # Keep track of the audio file
+
+    if record_or_upload == "Record":
+        st.write("Click the button below to start recording. Recording will stop after 5 seconds.")
+        if st.button("Start Recording"):
+            # Use a temporary file to store the recording
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as temp_audio_file:
+                try:
+                    # Recording logic
+                    samplerate = 16000
+                    duration = 5  # Record for 5 seconds
+                    st.write(f"Recording for {duration} seconds...")
+                    recording = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=1, dtype='int16')
+                    sd.wait()  # Wait until recording is finished
+                    audio_data = recording
+                    audio_filename = temp_audio_file.name #get the name of the temp file.
+                    sf.write(audio_filename, audio_data, samplerate) #save the recorded data
+
+                    st.success("Recording complete!")
+
+                except Exception as e:
+                    st.error(f"Error during recording: {e}")
+                    audio_data = None
+                    audio_filename = None
+
+    elif record_or_upload == "Upload":
+        uploaded_file = st.file_uploader("Upload an audio file (WAV)", type=["wav"])
+        if uploaded_file is not None:
+            try:
+                # Save the uploaded file to a temporary file
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as temp_audio_file:
+                    temp_audio_file.write(uploaded_file.read())
+                    audio_filename = temp_audio_file.name  # Get the name of the temp file
+                    audio_data, samplerate = sf.read(audio_filename) #read and process
+            except Exception as e:
+                st.error(f"Error uploading/processing file: {e}")
+                audio_data = None
+                audio_filename = None
+
+    # --- Model and Transcription (Conditional) ---
+    if audio_data is not None and audio_filename is not None: #check if we have audio data.
+        # Example: Using a simple pre-trained model (for demonstration purposes)
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(10, activation='relu', input_shape=(10,)),
+            tf.keras.layers.Dense(1, activation='sigmoid')
+        ])
+        #transcribe
+        transcription = transcribe_audio(audio_filename)
+
+        # Save model
+        model_filename = "speech_model.h5"
+        save_model(model, model_filename)
+        st.write(f"Model saved to {model_filename}")
+
+        # Optionally, display the audio
+        st.audio(audio_filename, format="audio/wav")
+
+if __name__ == "__main__":
+    main()
